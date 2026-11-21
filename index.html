@@ -90,14 +90,16 @@
             inset: 0;
             pointer-events: none;
             z-index: 40;
+            will-change: background, opacity;
+            transform: translateZ(0);
             background: radial-gradient(
-                circle clamp(200px, 32vw, 360px) at var(--mouse-x) var(--mouse-y),
+                circle clamp(190px, 34vw, 360px) at var(--mouse-x) var(--mouse-y),
                 rgba(245, 195, 110, 0.08) 0%,
                 rgba(6, 182, 212, 0.03) 35%,
                 rgba(6, 7, 8, 0.70) 75%,
                 rgba(3, 4, 5, 0.88) 100%
             );
-            transition: opacity 0.4s ease;
+            transition: opacity 0.25s ease;
         }
 
         /* Плавная резиновая типографика */
@@ -191,7 +193,7 @@
     <canvas id="dustCanvas" class="fixed inset-0 pointer-events-none z-30 opacity-65"></canvas>
 
     <!-- Навигационная панель -->
-    <header class="fixed top-0 left-0 right-0 z-50 bg-abyss/90 backdrop-blur-md border-b border-white/10">
+    <header class="fixed top-0 left-0 right-0 z-50 bg-abyss/95 lg:bg-abyss/90 lg:backdrop-blur-md border-b border-white/10">
         <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
             <!-- Логотип -->
             <a href="#hero" class="flex items-center gap-3 group">
@@ -252,7 +254,7 @@
         </div>
 
         <!-- Выдвижное мобильное меню (Drawer) -->
-        <div id="mobileDrawer" class="hidden lg:hidden bg-abyss/98 backdrop-blur-xl border-b border-white/15 px-4 pt-4 pb-6 space-y-5">
+        <div id="mobileDrawer" class="hidden lg:hidden bg-abyss border-b border-white/15 px-4 pt-4 pb-6 space-y-5">
             <!-- Переключатель языка в мобильном меню -->
             <div class="flex items-center justify-between bg-rock/80 p-3 rounded-xl border border-white/10">
                 <span data-i18n="langLabel" class="font-mono text-xs text-gray-400 uppercase">Язык / Language:</span>
@@ -2127,10 +2129,57 @@
 
         document.body.classList.add('flashlight-active');
 
-        function setBeamPosition(x, y) {
-            document.documentElement.style.setProperty('--mouse-x', `${x}px`);
-            document.documentElement.style.setProperty('--mouse-y', `${y}px`);
+        let targetBeamX = window.innerWidth * 0.5;
+        let targetBeamY = window.innerHeight * 0.42;
+        let currentBeamX = targetBeamX;
+        let currentBeamY = targetBeamY;
+        let lastAppliedX = -999;
+        let lastAppliedY = -999;
+        let swayPhase = 0;
+        let touchActiveRecently = false;
+        let touchIdleTimer = null;
+
+        function setBeamPosition(x, y, instant = false) {
+            targetBeamX = x;
+            targetBeamY = y;
+            if (instant) {
+                currentBeamX = x;
+                currentBeamY = y;
+                document.documentElement.style.setProperty('--mouse-x', `${Math.round(x)}px`);
+                document.documentElement.style.setProperty('--mouse-y', `${Math.round(y)}px`);
+                lastAppliedX = x;
+                lastAppliedY = y;
+            }
         }
+
+        function animateFlashlightBeam() {
+            if (flashlightEnabled) {
+                // На тач-экранах при отсутствии касания даём лёгкий плавный дрейф в одном RAF-цикле
+                if (isTouchDevice && !touchActiveRecently) {
+                    swayPhase += 0.018;
+                    const w = window.innerWidth;
+                    const h = window.innerHeight;
+                    targetBeamX = w * 0.5 + Math.cos(swayPhase) * (w * 0.22);
+                    targetBeamY = h * 0.42 + Math.sin(swayPhase * 1.35) * (h * 0.12);
+                }
+
+                const smoothFactor = isTouchDevice ? 0.26 : 0.22;
+                currentBeamX += (targetBeamX - currentBeamX) * smoothFactor;
+                currentBeamY += (targetBeamY - currentBeamY) * smoothFactor;
+
+                // Обновляем CSS-переменные только при заметном сдвиге (>= 1.5px), чтобы не нагружать GPU телефона
+                if (Math.abs(currentBeamX - lastAppliedX) >= 1.5 || Math.abs(currentBeamY - lastAppliedY) >= 1.5) {
+                    const rx = Math.round(currentBeamX);
+                    const ry = Math.round(currentBeamY);
+                    document.documentElement.style.setProperty('--mouse-x', `${rx}px`);
+                    document.documentElement.style.setProperty('--mouse-y', `${ry}px`);
+                    lastAppliedX = rx;
+                    lastAppliedY = ry;
+                }
+            }
+            requestAnimationFrame(animateFlashlightBeam);
+        }
+        requestAnimationFrame(animateFlashlightBeam);
 
         // Следим за курсором мыши
         window.addEventListener('mousemove', (e) => {
@@ -2139,29 +2188,24 @@
         }, { passive: true });
 
         // Поддержка касаний и свайпов на телефонах и планшетах
+        function markTouchActivity(touch) {
+            touchActiveRecently = true;
+            if (touchIdleTimer) clearTimeout(touchIdleTimer);
+            setBeamPosition(touch.clientX, touch.clientY);
+            touchIdleTimer = setTimeout(() => {
+                touchActiveRecently = false;
+            }, 1800);
+        }
+
         window.addEventListener('touchstart', (e) => {
             if (!flashlightEnabled || !e.touches.length) return;
-            setBeamPosition(e.touches[0].clientX, e.touches[0].clientY);
+            markTouchActivity(e.touches[0]);
         }, { passive: true });
 
         window.addEventListener('touchmove', (e) => {
             if (!flashlightEnabled || !e.touches.length) return;
-            setBeamPosition(e.touches[0].clientX, e.touches[0].clientY);
+            markTouchActivity(e.touches[0]);
         }, { passive: true });
-
-        // Плавное покачивание луча фонарика на сенсорных экранах
-        if (isTouchDevice) {
-            let swayPhase = 0;
-            setInterval(() => {
-                if (!flashlightEnabled) return;
-                swayPhase += 0.04;
-                const w = window.innerWidth;
-                const h = window.innerHeight;
-                const x = w * 0.5 + Math.cos(swayPhase) * (w * 0.24);
-                const y = h * 0.42 + Math.sin(swayPhase * 1.4) * (h * 0.14);
-                setBeamPosition(x, y);
-            }, 60);
-        }
 
         if (flashlightToggle) {
             flashlightToggle.addEventListener('click', () => {
